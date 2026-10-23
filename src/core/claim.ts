@@ -41,8 +41,41 @@ const claimedFromTx = async (signature: string, creator: PublicKey, treasury: Pu
   return { claimed, creatorGain, rent, fee: BigInt(tx.meta.fee) };
 };
 
+const FEE_CLAIM_LOG = /CollectCreatorFee|SweepCreatorFee/;
+
+// Fees claimed by another session of this same dev wallet never pass through our
+// claim transaction, so they would sit on the dev wallet and miss the split.
+const recordOutsideClaims = async (creator: PublicKey) => {
+  const known = await sql()`select signature from inflows where signature is not null`;
+  const seen = new Set(known.map((r) => r.signature as string));
+  const sigs = await rpc().getSignaturesForAddress(creator, { limit: 40 }, "confirmed");
+  let recorded = 0;
+  let lamports = 0n;
+  for (const s of sigs) {
+    if (s.err || seen.has(s.signature)) continue;
+    const tx = await rpc().getTransaction(s.signature, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
+    if (!tx?.meta) continue;
+    if (!(tx.meta.logMessages ?? []).some((line) => FEE_CLAIM_LOG.test(line))) continue;
+    const keys = tx.transaction.message.getAccountKeys({ accountKeysFromLookups: tx.meta.loadedAddresses ?? undefined });
+    let gain: bigint | null = null;
+    for (let i = 0; i < keys.length; i += 1) {
+      if (keys.get(i)?.equals(creator)) gain = BigInt(tx.meta.postBalances[i] - tx.meta.preBalances[i]);
+    }
+    if (gain === null || gain <= 0n) continue;
+    await sql()`
+      insert into inflows (kind, lamports, move_lamports, signature, status, meta)
+      values ('claim', ${gain}, ${gain}, ${s.signature}, 'claimed', ${sql().json({ outside: true })})
+    `;
+    recorded += 1;
+    lamports += gain;
+  }
+  if (recorded) log("claim.outside", { count: recorded, lamports: lamports.toString() });
+};
+
 export const claimAndMove = async (creator: Keypair, treasury: Keypair) => {
   // Finish any claim from an earlier tick first.
+  await settleInflows(creator, treasury);
+  await recordOutsideClaims(creator.publicKey);
   await settleInflows(creator, treasury);
 
   const waiting = await vaultLamports(creator.publicKey);
