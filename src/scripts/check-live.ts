@@ -90,6 +90,8 @@ if (config.product === "zero") {
   }
 }
 const live = await liveToken().catch(() => null);
+if (config.mintSuffix && !/^[1-9A-HJ-NP-Za-km-z]+$/.test(config.mintSuffix))
+  bad(`MINT_SUFFIX "${config.mintSuffix}" can never match: Solana addresses have no 0, O, I or lowercase l. Copy the exact last characters of your vanity CA.`);
 info(live ? `live coin ${live.mint.toBase58()} (detected ${live.detectedAt.toISOString()})` : `not live yet: watching the deploy wallet for a coin ending in "${config.mintSuffix}"`);
 info(`rules: split every ${config.splitMinutes} min, min hold $${config.minHoldUsd}, holders get ${config.holderShareBps / 100}% , costs ${config.deductCosts ? "come out of the pool" : "are covered by the fee wallet"}`);
 info(`switches: splits ${config.splitsEnabled ? "on" : "OFF"}, payouts ${config.payoutsEnabled ? "on" : "OFF"}, dry run ${config.dryRun ? "ON" : "off"}`);
