@@ -12,9 +12,8 @@ import { minFor, routeDefs, routeFor, settleStocks, STOCKS } from "./product/rou
 
 const creator = keypairFromEnv("CREATOR_SECRET");
 const treasury = keypairFromEnv("TREASURY_SECRET");
-if (!creator) throw new Error("CREATOR_SECRET (the deploy wallet) is required.");
 if (!treasury) throw new Error("TREASURY_SECRET is required.");
-if (creator.publicKey.equals(treasury.publicKey)) throw new Error("CREATOR_SECRET and TREASURY_SECRET must be different wallets.");
+if (creator?.publicKey.equals(treasury.publicKey)) throw new Error("CREATOR_SECRET and TREASURY_SECRET must be different wallets.");
 
 const app = createApp({
   treasury: treasury.publicKey,
@@ -28,7 +27,7 @@ const app = createApp({
 });
 preferenceRoutes(app, routeDefs());
 app.get("/api/wallets", wrap(async (_req, res) => {
-  json(res, { treasury: treasury.publicKey.toBase58(), deployWallet: creator.publicKey.toBase58() });
+  json(res, { treasury: treasury.publicKey.toBase58(), deployWallet: creator?.publicKey.toBase58() ?? null });
 }));
 app.get("/api/payouts/recent", wrap(async (_req, res) => {
   json(res, {
@@ -40,17 +39,22 @@ app.get("/api/payouts/recent", wrap(async (_req, res) => {
 finishApp(app);
 app.listen(config.port, () => log("server.listening", { port: config.port, product: config.product }));
 
-startPayLoop({ treasury, routeFor, minFor, settleOther: settleStocks(treasury) });
-startKeeper({
-  bringIn: async () => {
-    await claimAndMove(creator, treasury);
-  },
-  excluded: () => excludedBase(treasury.publicKey, creator.publicKey),
-});
-
 let stopped = false;
 process.on("SIGTERM", () => {
   stopped = true;
   process.exit(0);
 });
-watchLaunch(creator.publicKey, () => stopped).catch((err) => log("launch.error", { error: errText(err) }));
+
+// The deploy wallet key stays with Luke. The API stays up until he pastes it, then a restart watches the coin.
+if (!creator) {
+  log("server.waiting", { missing: "CREATOR_SECRET" });
+} else {
+  startPayLoop({ treasury, routeFor, minFor, settleOther: settleStocks(treasury) });
+  startKeeper({
+    bringIn: async () => {
+      await claimAndMove(creator, treasury);
+    },
+    excluded: () => excludedBase(treasury.publicKey, creator.publicKey),
+  });
+  watchLaunch(creator.publicKey, () => stopped).catch((err) => log("launch.error", { error: errText(err) }));
+}
